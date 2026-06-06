@@ -627,6 +627,15 @@ def aprobar_taller(id_taller: int, db: Session = Depends(get_db)):
     if not taller:
         raise HTTPException(status_code=404, detail="Taller no encontrado")
     taller.estado_aprobacion = "Aprobado"
+    
+    # Aprovisionamiento Físico de la Base de Datos
+    try:
+        from services.provisioning import create_tenant_database
+        create_tenant_database(taller.db_name)
+    except Exception as e:
+        # Si falla la creación de la BD, lanzamos error y no se aprueba
+        raise HTTPException(status_code=500, detail=f"Error al aprovisionar BD física: {str(e)}")
+
     # El envío de email está habilitado, las credenciales están en .env
     from utils import send_approval_email
     send_approval_email(destinatario=taller.correo, nombre_taller=taller.razon_social)

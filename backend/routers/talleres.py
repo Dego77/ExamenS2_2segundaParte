@@ -31,15 +31,7 @@ def create_taller(taller: schemas.TallerCreate, db: Session = Depends(get_db)):
     # 4. Crear el taller en la DB Maestra
     new_taller = crud.create_taller(db=db, taller=taller, db_name=db_name)
     
-    # 5. Aprovisionamiento Físico de la Base de Datos
-    try:
-        create_tenant_database(db_name)
-    except Exception as e:
-        # Rollback manual en la maestra si falla el aprovisionamiento
-        db.delete(new_taller)
-        db.commit()
-        raise HTTPException(status_code=500, detail=f"Error al crear la infraestructura del taller: {str(e)}")
-
+    # 5. La base de datos física se creará solo cuando el SuperAdmin apruebe la solicitud
     return new_taller
 
 @router.get("/{id_taller}", response_model=schemas.TallerResponse)
