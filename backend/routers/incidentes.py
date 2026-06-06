@@ -147,7 +147,7 @@ async def reportar_incidente(
     db_analisis = models_shared.AnalisisIA(
         id_incidente=db_incidente.id_incidente,
         clasificacion_sugerida=ai_result.get("categoria", "Otro"),
-        resumen_estructurado=ai_result.get("diagnostico_ia", "Sin diagnóstico disponible.")
+        resumen_estructurado=ai_result.get("diagnostico_taller", "Sin diagnóstico técnico disponible.")
     )
     db.add(db_analisis)
     db.commit()
@@ -180,7 +180,7 @@ async def reportar_incidente(
                     "cliente": nombre_cliente,
                     "vehiculo": "Vehículo en ruta", 
                     "transcripcion_audio": ai_result.get("transcripcion_audio", ""),
-                    "evaluacion_ia": ai_result.get("diagnostico_ia", "Sin diagnóstico disponible."),
+                    "evaluacion_ia": ai_result.get("diagnostico_taller", "Sin diagnóstico técnico disponible."),
                     "url_audio_evidencia": f"uploads/{os.path.basename(audio_path)}" if audio_path else None,
                     "url_foto_evidencia": f"uploads/{os.path.basename(foto_path)}" if foto_path else None
                 }
