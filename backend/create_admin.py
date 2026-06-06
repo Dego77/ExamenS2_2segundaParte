@@ -4,13 +4,13 @@ import os
 # Asegurarnos de que el script pueda importar módulos del backend
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from database import SessionLocal
-import models
+from database import MasterSessionLocal
+import models_shared as models
 import schemas
 from crud import get_password_hash
 
 def create_super_admin():
-    db = SessionLocal()
+    db = MasterSessionLocal()
     try:
         # Verificar si ya existe
         admin_existente = db.query(models.Admin).filter(models.Admin.correo == "asiscar.asistente@gmail.com").first()
