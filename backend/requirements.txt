@@ -1,0 +1,17 @@
+fastapi
+uvicorn
+sqlalchemy
+psycopg2-binary
+pydantic
+pydantic-settings
+alembic
+python-dotenv
+python-multipart
+passlib[bcrypt]
+bcrypt==3.2.2
+email-validator
+pyjwt
+google-generativeai
+stripe
+firebase-admin
+Pillow
