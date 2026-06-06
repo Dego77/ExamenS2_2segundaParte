@@ -627,9 +627,9 @@ def aprobar_taller(id_taller: int, db: Session = Depends(get_db)):
     if not taller:
         raise HTTPException(status_code=404, detail="Taller no encontrado")
     taller.estado_aprobacion = "Aprobado"
-    # El envío de email se mantiene comentado si no hay servidor SMTP configurado
-    # from utils import send_approval_email
-    # send_approval_email(destinatario=taller.correo, nombre_taller=taller.razon_social)
+    # El envío de email está habilitado, las credenciales están en .env
+    from utils import send_approval_email
+    send_approval_email(destinatario=taller.correo, nombre_taller=taller.razon_social)
     
     # Registrar en Bitácora
     log = models.Bitacora(
