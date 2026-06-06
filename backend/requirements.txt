@@ -11,7 +11,8 @@ passlib[bcrypt]
 bcrypt==3.2.2
 email-validator
 pyjwt
-google-generativeai
+google-genai
 stripe
 firebase-admin
 Pillow
+websockets
