@@ -16,7 +16,7 @@ class SearchingWorkshopPage extends StatefulWidget {
   State<SearchingWorkshopPage> createState() => _SearchingWorkshopPageState();
 }
 
-class _SearchingWorkshopPageState extends State<SearchingWorkshopPage> {
+class _SearchingWorkshopPageState extends State<SearchingWorkshopPage> with SingleTickerProviderStateMixin {
   String _status = "Analizando situación con Inteligencia Artificial...";
   bool _hasError = false;
   String _errorMessage = "";
@@ -25,6 +25,7 @@ class _SearchingWorkshopPageState extends State<SearchingWorkshopPage> {
   bool _argsLoaded = false;
   Timer? _pollingTimer;
   StreamSubscription? _wsSubscription;
+  late AnimationController _rotationController;
   final ApiService _apiService = ApiService();
   final ClientWebsocketService _wsService = ClientWebsocketService();
 
@@ -42,9 +43,21 @@ class _SearchingWorkshopPageState extends State<SearchingWorkshopPage> {
   Set<Marker> _markers = {};
   int? _idTallerSeleccionado;
   String? _tallerNombreSeleccionado;
+  String? _evaluacionIa;
+  String? _urgenciaIa;
+
+  @override
+  void initState() {
+    super.initState();
+    _rotationController = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 3),
+    )..repeat();
+  }
 
   @override
   void dispose() {
+    _rotationController.dispose();
     _pollingTimer?.cancel();
     _wsSubscription?.cancel();
     _wsService.disconnect();
@@ -98,6 +111,15 @@ class _SearchingWorkshopPageState extends State<SearchingWorkshopPage> {
           setState(() {
             _idIncidente = response.data['id_incidente'];
             _talleresCercanos = response.data['talleres_notificados'] ?? [];
+
+            final eval = response.data['evaluacion_ia'];
+            if (eval is Map) {
+              _evaluacionIa = eval['diagnostico_ia']?.toString();
+              _urgenciaIa = eval['urgencia']?.toString();
+            } else if (eval != null) {
+              _evaluacionIa = eval.toString();
+            }
+
             _step = 1;
             _status = "Selecciona un taller disponible o espera cotizaciones";
             _updateMarkers();
@@ -154,6 +176,13 @@ class _SearchingWorkshopPageState extends State<SearchingWorkshopPage> {
     });
 
     _cargarCotizacionesExistentes();
+    
+    // Polling de respaldo por si falla el WebSocket
+    _pollingTimer = Timer.periodic(const Duration(seconds: 8), (_) {
+      if (mounted && _idIncidente != null) {
+        _cargarCotizacionesExistentes();
+      }
+    });
   }
 
   Future<void> _cargarCotizacionesExistentes() async {
@@ -204,23 +233,41 @@ class _SearchingWorkshopPageState extends State<SearchingWorkshopPage> {
   }
 
   void _updateMarkers() {
-    setState(() {
-      _markers = _talleresCercanos.map((t) {
-        return Marker(
-          markerId: MarkerId(t['id_taller'].toString()),
-          position: LatLng(t['latitud'], t['longitud']),
-          infoWindow: InfoWindow(
-            title: t['razon_social'],
-            snippet: "Toca para seleccionar",
+    final Set<Marker> newMarkers = {};
+    
+    // Marcador del Cliente (Azul)
+    if (_latitud != null && _longitud != null) {
+      newMarkers.add(
+        Marker(
+          markerId: const MarkerId('cliente_loc'),
+          position: LatLng(_latitud!, _longitud!),
+          icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure),
+          infoWindow: const InfoWindow(title: 'Tu Ubicación'),
+        ),
+      );
+    }
+    
+    // Marcadores de Talleres (Verde)
+    for (var t in _talleresCercanos) {
+      final lat = t['latitud'];
+      final lng = t['longitud'];
+      if (lat != null && lng != null) {
+        newMarkers.add(
+          Marker(
+            markerId: MarkerId('taller_${t['id_taller']}'),
+            position: LatLng(lat.toDouble(), lng.toDouble()),
+            icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen),
+            infoWindow: InfoWindow(
+              title: t['razon_social'] ?? 'Taller',
+              snippet: 'Distancia: ${t['distancia']?.toStringAsFixed(1) ?? '1.5'} km',
+            ),
           ),
-          onTap: () {
-            setState(() {
-              _idTallerSeleccionado = t['id_taller'];
-              _tallerNombreSeleccionado = t['razon_social'];
-            });
-          },
         );
-      }).toSet();
+      }
+    }
+
+    setState(() {
+      _markers = newMarkers;
     });
   }
 
@@ -255,6 +302,15 @@ class _SearchingWorkshopPageState extends State<SearchingWorkshopPage> {
 
   @override
   Widget build(BuildContext context) {
+    if (_step == 0) {
+      return Scaffold(
+        backgroundColor: const Color(0xFFF7F8FC),
+        body: Center(
+          child: _buildAiOverlay(),
+        ),
+      );
+    }
+
     return Scaffold(
       body: Stack(
         children: [
@@ -269,7 +325,11 @@ class _SearchingWorkshopPageState extends State<SearchingWorkshopPage> {
           ),
           SafeArea(
             child: Column(
-              children: [_buildHeader(), const Spacer(), _buildInfoPanel()],
+              children: [
+                _buildHeader(),
+                const Spacer(),
+                _buildInfoPanel(),
+              ],
             ),
           ),
         ],
@@ -277,30 +337,135 @@ class _SearchingWorkshopPageState extends State<SearchingWorkshopPage> {
     );
   }
 
-  Widget _buildHeader() {
-    return Container(
-      margin: const EdgeInsets.all(16),
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(color: Colors.black.withOpacity(0.1), blurRadius: 10),
-        ],
-      ),
-      child: Row(
-        children: [
-          IconButton(
-            icon: const Icon(Icons.arrow_back),
-            onPressed: () => Navigator.pop(context),
+  Widget _buildAiOverlay() {
+    return Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        Stack(
+          alignment: Alignment.center,
+          children: [
+            Container(
+              width: 130,
+              height: 130,
+              decoration: const BoxDecoration(
+                color: Color(0xFFE5F1FF),
+                shape: BoxShape.circle,
+              ),
+              child: const Center(
+                child: Icon(
+                  Icons.auto_awesome_rounded,
+                  size: 50,
+                  color: Color(0xFF007AFF),
+                ),
+              ),
+            ),
+            RotationTransition(
+              turns: _rotationController,
+              child: const SizedBox(
+                width: 150,
+                height: 150,
+                child: CircularProgressIndicator(
+                  value: 0.75,
+                  strokeWidth: 3.5,
+                  valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF007AFF)),
+                  backgroundColor: Colors.transparent,
+                ),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 50),
+        Text(
+          "Tranquilo, estamos contigo.",
+          style: GoogleFonts.outfit(
+            fontSize: 24,
+            fontWeight: FontWeight.bold,
+            color: Colors.black87,
           ),
-          const SizedBox(width: 8),
-          Expanded(
+        ),
+        const SizedBox(height: 16),
+        Text(
+          "Analizando situación con Inteligencia Artificial...",
+          textAlign: TextAlign.center,
+          style: GoogleFonts.inter(
+            fontSize: 15,
+            color: Colors.grey[600],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildHeader() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          // Botón de retroceso circular
+          Container(
+            decoration: BoxDecoration(
+              color: Colors.white,
+              shape: BoxShape.circle,
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.08),
+                  blurRadius: 8,
+                  offset: const Offset(0, 2),
+                ),
+              ],
+            ),
+            child: IconButton(
+              icon: const Icon(Icons.arrow_back_ios_new_rounded, color: Colors.black87, size: 20),
+              onPressed: () => Navigator.pop(context),
+            ),
+          ),
+          // Pill central "Cotizaciones"
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 10),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(30),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.08),
+                  blurRadius: 8,
+                  offset: const Offset(0, 2),
+                ),
+              ],
+            ),
             child: Text(
-              "Buscando Asistencia",
+              "Cotizaciones",
               style: GoogleFonts.outfit(
-                fontSize: 18,
+                fontSize: 16,
                 fontWeight: FontWeight.bold,
+                color: Colors.black87,
+              ),
+            ),
+          ),
+          // Badge circular de cotizaciones recibidas
+          Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              color: const Color(0xFF007AFF),
+              shape: BoxShape.circle,
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.15),
+                  blurRadius: 8,
+                  offset: const Offset(0, 2),
+                ),
+              ],
+            ),
+            child: Center(
+              child: Text(
+                "${_cotizaciones.length}",
+                style: GoogleFonts.outfit(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.white,
+                ),
               ),
             ),
           ),
@@ -313,103 +478,255 @@ class _SearchingWorkshopPageState extends State<SearchingWorkshopPage> {
     return Container(
       padding: const EdgeInsets.all(24),
       decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+        color: const Color(0xFFF7F9FC),
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(32)),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.1),
-            blurRadius: 10,
+            color: Colors.black.withOpacity(0.08),
+            blurRadius: 20,
             spreadRadius: 5,
+            offset: const Offset(0, -5),
           ),
         ],
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          if (_cotizaciones.isNotEmpty) ...[
-            Text(
-              "Propuestas recibidas:",
-              style: GoogleFonts.outfit(
-                fontSize: 14,
-                color: Colors.grey[600],
-                fontWeight: FontWeight.w600,
+          // Handle deslizable
+          Center(
+            child: Container(
+              width: 40,
+              height: 4,
+              margin: const EdgeInsets.only(bottom: 20),
+              decoration: BoxDecoration(
+                color: Colors.grey[300],
+                borderRadius: BorderRadius.circular(2),
               ),
             ),
-            const SizedBox(height: 12),
+          ),
+
+          // Título de la sección
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(6),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF007AFF).withOpacity(0.1),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(Icons.receipt_long_rounded, color: Color(0xFF007AFF), size: 20),
+              ),
+              const SizedBox(width: 10),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    "Propuestas recibidas",
+                    style: GoogleFonts.outfit(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.black87,
+                    ),
+                  ),
+                  Text(
+                    "Selecciona la mejor opción para tu emergencia",
+                    style: GoogleFonts.inter(
+                      fontSize: 12,
+                      color: Colors.grey[600],
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+
+          // Listado de cotizaciones
+          if (_cotizaciones.isNotEmpty) ...[
             SizedBox(
-              height: 120,
-              child: ListView.builder(
-                scrollDirection: Axis.horizontal,
+              height: 310,
+              child: ListView.separated(
+                padding: const EdgeInsets.symmetric(vertical: 4),
                 itemCount: _cotizaciones.length,
+                separatorBuilder: (context, index) => const SizedBox(height: 16),
                 itemBuilder: (context, index) {
                   final cot = _cotizaciones[index];
+                  final tCercano = _talleresCercanos.firstWhere(
+                    (t) => t['id_taller'] == cot['id_taller'],
+                    orElse: () => null,
+                  );
+                  final double distancia = tCercano != null ? (tCercano['distancia']?.toDouble() ?? 1.5) : 1.5;
+
                   return Container(
-                    width: 250,
-                    margin: const EdgeInsets.only(right: 12),
-                    padding: const EdgeInsets.all(12),
+                    padding: const EdgeInsets.all(16),
                     decoration: BoxDecoration(
-                      color: AppTheme.primaryBlue.withOpacity(0.05),
-                      borderRadius: BorderRadius.circular(16),
-                      border: Border.all(
-                        color: AppTheme.primaryBlue.withOpacity(0.2),
-                      ),
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(24),
+                      border: Border.all(color: const Color(0xFFE5F1FF), width: 1.5),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.02),
+                          blurRadius: 10,
+                          offset: const Offset(0, 4),
+                        ),
+                      ],
                     ),
                     child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
                         Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: [
+                            Container(
+                              padding: const EdgeInsets.all(10),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFFE8F8F5),
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: const Icon(Icons.storefront_rounded, color: Color(0xFF2EBA8B)),
+                            ),
+                            const SizedBox(width: 12),
                             Expanded(
-                              child: Text(
-                                cot['taller_nombre'] ?? 'Taller',
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                ),
-                                overflow: TextOverflow.ellipsis,
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    cot['taller_nombre'] ?? 'Taller',
+                                    style: GoogleFonts.outfit(
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 16,
+                                      color: Colors.black87,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Row(
+                                    children: [
+                                      const Icon(Icons.star_rounded, color: Colors.amber, size: 16),
+                                      const SizedBox(width: 4),
+                                      Text(
+                                        "5.0",
+                                        style: GoogleFonts.inter(
+                                          fontWeight: FontWeight.bold,
+                                          fontSize: 12,
+                                          color: Colors.black87,
+                                        ),
+                                      ),
+                                      const SizedBox(width: 6),
+                                      Container(
+                                        width: 4,
+                                        height: 4,
+                                        decoration: const BoxDecoration(color: Colors.grey, shape: BoxShape.circle),
+                                      ),
+                                      const SizedBox(width: 6),
+                                      Text(
+                                        "${distancia.toStringAsFixed(1)} km",
+                                        style: GoogleFonts.inter(
+                                          fontSize: 12,
+                                          color: Colors.grey[600],
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ],
                               ),
                             ),
-                            Text(
-                              "Bs. ${cot['monto']}",
-                              style: const TextStyle(
-                                color: AppTheme.primaryBlue,
-                                fontWeight: FontWeight.bold,
+                            Container(
+                              padding: const EdgeInsets.all(8),
+                              decoration: const BoxDecoration(
+                                color: Color(0xFFE5F1FF),
+                                shape: BoxShape.circle,
                               ),
+                              child: const Icon(Icons.map_rounded, color: Color(0xFF007AFF), size: 20),
                             ),
                           ],
                         ),
-                        const SizedBox(height: 4),
-                        Text(
-                          "${cot['tiempo_minutos']} min - ${cot['descripcion'] ?? ''}",
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: Colors.grey[600],
+                        const SizedBox(height: 12),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFF4F6F9),
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: Row(
+                                  children: [
+                                    Container(
+                                      padding: const EdgeInsets.all(6),
+                                      decoration: const BoxDecoration(
+                                        color: Color(0xFFE5F1FF),
+                                        shape: BoxShape.circle,
+                                      ),
+                                      child: const Icon(Icons.payment_rounded, color: Color(0xFF007AFF), size: 16),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Text("Precio", style: GoogleFonts.inter(fontSize: 11, color: Colors.grey[600])),
+                                        Text("Bs. ${cot['monto']}", style: GoogleFonts.outfit(fontSize: 15, fontWeight: FontWeight.bold)),
+                                      ],
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              Container(width: 1, height: 30, color: Colors.grey[300]),
+                              const SizedBox(width: 16),
+                              Expanded(
+                                child: Row(
+                                  children: [
+                                    Container(
+                                      padding: const EdgeInsets.all(6),
+                                      decoration: const BoxDecoration(
+                                        color: Color(0xFFFFF7E6),
+                                        shape: BoxShape.circle,
+                                      ),
+                                      child: const Icon(Icons.access_time_rounded, color: Colors.orange, size: 16),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Text("Tiempo est.", style: GoogleFonts.inter(fontSize: 11, color: Colors.grey[600])),
+                                        Text("${cot['tiempo_minutos']} min", style: GoogleFonts.outfit(fontSize: 15, fontWeight: FontWeight.bold)),
+                                      ],
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
                           ),
                         ),
-                        const Spacer(),
-                        SizedBox(
-                          width: double.infinity,
-                          height: 30,
-                          child: ElevatedButton(
-                            onPressed: () =>
-                                _aceptarCotizacion(cot['id_cotizacion']),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: AppTheme.primaryBlue,
-                              padding: EdgeInsets.zero,
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(8),
+                        const SizedBox(height: 16),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: OutlinedButton.icon(
+                                onPressed: () => _rechazarCotizacion(cot['id_cotizacion']),
+                                icon: const Icon(Icons.close, color: Colors.redAccent, size: 18),
+                                label: Text("Rechazar", style: GoogleFonts.inter(color: Colors.redAccent, fontWeight: FontWeight.bold)),
+                                style: OutlinedButton.styleFrom(
+                                  side: const BorderSide(color: Colors.redAccent),
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                  padding: const EdgeInsets.symmetric(vertical: 12),
+                                ),
                               ),
                             ),
-                            child: const Text(
-                              "Aceptar",
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: Colors.white,
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: ElevatedButton.icon(
+                                onPressed: () => _confirmarAceptacionDialog(cot),
+                                icon: const Icon(Icons.check, color: Colors.white, size: 18),
+                                label: Text("Aceptar", style: GoogleFonts.inter(color: Colors.white, fontWeight: FontWeight.bold)),
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: const Color(0xFF0C59A4),
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                  padding: const EdgeInsets.symmetric(vertical: 12),
+                                ),
                               ),
                             ),
-                          ),
+                          ],
                         ),
                       ],
                     ),
@@ -417,34 +734,181 @@ class _SearchingWorkshopPageState extends State<SearchingWorkshopPage> {
                 },
               ),
             ),
-            const SizedBox(height: 16),
-            const Divider(),
-            const SizedBox(height: 16),
-          ],
-          _buildStatusText(),
-          const SizedBox(height: 16),
-          if (_step == 1 && _idTallerSeleccionado != null)
-            ElevatedButton(
-              onPressed: _confirmarSeleccionTaller,
-              child: Text("Solicitar auxilio a $_tallerNombreSeleccionado"),
+          ] else ...[
+            Container(
+              padding: const EdgeInsets.symmetric(vertical: 30),
+              child: Column(
+                children: [
+                  const SizedBox(
+                    width: 40,
+                    height: 40,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 3,
+                      color: Color(0xFF007AFF),
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+                  Text(
+                    "Esperando cotizaciones...",
+                    style: GoogleFonts.outfit(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.grey[800],
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    "Los talleres cercanos están evaluando tu caso con la IA para enviarte sus propuestas.",
+                    style: GoogleFonts.inter(
+                      fontSize: 14,
+                      color: Colors.grey[500],
+                      height: 1.5,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                ],
+              ),
             ),
-          if (_step == 2)
-            const LinearProgressIndicator(color: AppTheme.primaryBlue),
+          ],
+          if (_step == 2) ...[
+            const SizedBox(height: 16),
+            const LinearProgressIndicator(color: Color(0xFF007AFF)),
+          ],
         ],
       ),
     );
   }
 
-  Widget _buildStatusText() {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 40),
-      child: Text(
-        _hasError ? _errorMessage : _status,
-        textAlign: TextAlign.center,
-        style: GoogleFonts.outfit(
-          fontSize: 18,
-          color: _hasError ? Colors.red : AppTheme.textDark,
-          fontWeight: FontWeight.w600,
+  void _rechazarCotizacion(int idCotizacion) async {
+    try {
+      await _apiService.rechazarCotizacion(idCotizacion);
+      setState(() {
+        _cotizaciones.removeWhere((c) => c['id_cotizacion'] == idCotizacion);
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Propuesta rechazada")),
+        );
+      }
+    } catch (e) {
+      debugPrint("Error al rechazar cotización: $e");
+    }
+  }
+
+  void _confirmarAceptacionDialog(Map<String, dynamic> cot) {
+    showDialog(
+      context: context,
+      barrierDismissible: true,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+        backgroundColor: Colors.white,
+        contentPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              "¿Aceptar cotización?",
+              style: GoogleFonts.outfit(
+                fontSize: 22,
+                fontWeight: FontWeight.bold,
+                color: Colors.black87,
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 20),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(20),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF0F5FA),
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: Column(
+                children: [
+                  Text(
+                    cot['taller_nombre'] ?? 'Taller',
+                    style: GoogleFonts.outfit(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.black87,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    "Bs. ${cot['monto']}",
+                    style: GoogleFonts.outfit(
+                      fontSize: 32,
+                      fontWeight: FontWeight.bold,
+                      color: const Color(0xFF007AFF),
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    "${cot['tiempo_minutos']} min estimados",
+                    style: GoogleFonts.inter(
+                      fontSize: 14,
+                      color: Colors.grey[600],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 20),
+            Text(
+              "Al aceptar, este taller será notificado y asignará un técnico para atenderte.",
+              textAlign: TextAlign.center,
+              style: GoogleFonts.inter(
+                fontSize: 13,
+                color: Colors.grey[600],
+                height: 1.4,
+              ),
+            ),
+            const SizedBox(height: 24),
+            Row(
+              children: [
+                Expanded(
+                  child: TextButton(
+                    onPressed: () => Navigator.pop(ctx),
+                    child: Text(
+                      "Cancelar",
+                      style: GoogleFonts.inter(
+                        fontWeight: FontWeight.bold,
+                        color: Colors.grey[600],
+                        fontSize: 16,
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: ElevatedButton(
+                    onPressed: () {
+                      Navigator.pop(ctx);
+                      _aceptarCotizacion(cot['id_cotizacion']);
+                    },
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF2EBA8B),
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      elevation: 0,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                    child: Text(
+                      "Aceptar",
+                      style: GoogleFonts.inter(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 16,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
         ),
       ),
     );
@@ -466,7 +930,7 @@ class _SearchingWorkshopPageState extends State<SearchingWorkshopPage> {
       if (mounted) {
         Navigator.pushReplacementNamed(
           context,
-          '/payment',
+          '/tracking',
           arguments: {
             'id_incidente': _idIncidente,
             'id_taller': cot['id_taller'],

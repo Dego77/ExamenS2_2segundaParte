@@ -189,6 +189,7 @@ export class RegistroTaller implements AfterViewInit {
           console.log('Registro exitoso', response);
           this.isSuccess = true;
           this.isLoading = false;
+          this.cdr.detectChanges();
           alert('✅ ¡Tu taller se ha registrado de manera exitosa! Ahora está listo para la validación administrativa.');
 
           setTimeout(() => {
@@ -206,15 +207,19 @@ export class RegistroTaller implements AfterViewInit {
             } else {
               this.errorMessage = err.error.detail;
             }
+          } else if (err.status === 400) {
+            this.errorMessage = 'El correo o el NIT ingresado ya se encuentra registrado. Por favor, intenta con otros datos o inicia sesión.';
           } else {
             this.errorMessage = 'No se pudo conectar con el servidor. Por favor intente de nuevo.';
           }
+          this.cdr.detectChanges();
         }
       });
     } catch (e) {
       console.error('Excepción local en onSubmit', e);
       this.isLoading = false;
       this.errorMessage = 'Ocurrió un error inesperado al procesar el formulario.';
+      this.cdr.detectChanges();
     }
   }
 }

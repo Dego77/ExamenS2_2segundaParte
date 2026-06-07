@@ -32,6 +32,8 @@ def get_incidente_tracking(id_incidente: int, db: Session = Depends(get_master_d
         raise HTTPException(status_code=404, detail="Incidente no encontrado")
         
     asistencia = db.query(models_shared.Asistencia).filter(models_shared.Asistencia.id_incidente == id_incidente).first()
+    analisis = db.query(models_shared.AnalisisIA).filter(models_shared.AnalisisIA.id_incidente == id_incidente).first()
+    diagnostico_ia = analisis.resumen_estructurado if analisis else "Sin diagnóstico técnico disponible."
     
     # Obtener coordenadas del técnico desde la tabla Tecnico (donde la app envía la ubicación)
     lat_tecnico = None
@@ -51,6 +53,7 @@ def get_incidente_tracking(id_incidente: int, db: Session = Depends(get_master_d
         "estado": incidente.estado_solicitud,
         "tipo_problema": incidente.tipo_problema,
         "nivel_prioridad": incidente.nivel_prioridad,
+        "diagnostico_ia": diagnostico_ia,
         "lat_cliente": incidente.ubicacion_latitud,
         "lng_cliente": incidente.ubicacion_longitud,
         "taller_nombre": asistencia.taller.razon_social if (asistencia and asistencia.taller) else "Buscando taller...",
@@ -159,42 +162,74 @@ async def reportar_incidente(
     cliente = db.query(models_shared.Cliente).filter(models_shared.Cliente.id_cliente == db_incidente.id_cliente).first()
     nombre_cliente = cliente.nombres if cliente else "Conductor en Ruta"
     
-    # Notificaciones WebSocket
-    talleres_online = []
+    # Notificaciones WebSocket y guardado en Tenant DB
+    talleres_notificados = []
     try:
         from websocket_manager import manager
         print(f"📢 Conexiones actuales en el manager: {list(manager.active_connections.keys())}", flush=True)
         
         for taller in talleres_cercanos:
-            user_key = f"taller_{taller.get('id_taller')}"
+            id_taller = taller.get('id_taller')
+            user_key = f"taller_{id_taller}"
+            talleres_notificados.append(taller)
+            
+            payload = {
+                "type": "NUEVA_EMERGENCIA",
+                "id_incidente": db_incidente.id_incidente,
+                "problema": db_incidente.tipo_problema,
+                "prioridad": db_incidente.nivel_prioridad,
+                "distancia_km": taller.get("distancia", 1.0),
+                "latitud": ubicacion_latitud,
+                "longitud": ubicacion_longitud,
+                "cliente": nombre_cliente,
+                "vehiculo": "Vehículo en ruta", 
+                "transcripcion_audio": ai_result.get("transcripcion_audio", ""),
+                "evaluacion_ia": ai_result.get("diagnostico_taller", "Sin diagnóstico técnico disponible."),
+                "url_audio_evidencia": f"uploads/{os.path.basename(audio_path)}" if audio_path else None,
+                "url_foto_evidencia": f"uploads/{os.path.basename(foto_path)}" if foto_path else None
+            }
+            
+            # 1. Guardar en la DB Tenant del Taller
+            try:
+                from database import get_taller_db
+                import models_tenant
+                tenant_db_gen = get_taller_db(id_taller)
+                tenant_db = next(tenant_db_gen)
+                
+                existe_tenant = tenant_db.query(models_tenant.Incidente).filter(models_tenant.Incidente.id_incidente == db_incidente.id_incidente).first()
+                if not existe_tenant:
+                    db_incidente_tenant = models_tenant.Incidente(
+                        id_incidente=db_incidente.id_incidente,
+                        id_cliente=db_incidente.id_cliente,
+                        id_vehiculo=db_incidente.id_vehiculo,
+                        ubicacion_latitud=ubicacion_latitud,
+                        ubicacion_longitud=ubicacion_longitud,
+                        tipo_problema=db_incidente.tipo_problema,
+                        descripcion_manual=descripcion_manual,
+                        nivel_prioridad=db_incidente.nivel_prioridad,
+                        estado_solicitud='Pendiente'
+                    )
+                    tenant_db.add(db_incidente_tenant)
+                    tenant_db.commit()
+            except Exception as e:
+                print(f"⚠️ Error guardando en DB Tenant del taller {id_taller}: {e}", flush=True)
+
+            # 2. Enviar por WebSocket si está conectado
+            import asyncio
             if user_key in manager.active_connections:
-                talleres_online.append(taller)
-                payload = {
-                    "type": "NUEVA_EMERGENCIA",
-                    "id_incidente": db_incidente.id_incidente,
-                    "problema": db_incidente.tipo_problema,
-                    "prioridad": db_incidente.nivel_prioridad,
-                    "distancia_km": taller.get("distancia", 1.0),
-                    "latitud": ubicacion_latitud,
-                    "longitud": ubicacion_longitud,
-                    "cliente": nombre_cliente,
-                    "vehiculo": "Vehículo en ruta", 
-                    "transcripcion_audio": ai_result.get("transcripcion_audio", ""),
-                    "evaluacion_ia": ai_result.get("diagnostico_taller", "Sin diagnóstico técnico disponible."),
-                    "url_audio_evidencia": f"uploads/{os.path.basename(audio_path)}" if audio_path else None,
-                    "url_foto_evidencia": f"uploads/{os.path.basename(foto_path)}" if foto_path else None
-                }
-                import asyncio
                 print(f"📡 Enviando notificación a {user_key}...", flush=True)
                 asyncio.create_task(manager.send_personal_message(payload, user_key))
+            else:
+                print(f"💤 Taller {id_taller} offline, pero notificado en DB.", flush=True)
+                
     except Exception as e:
-        print(f"❌ Error WS en reportar_incidente: {e}", flush=True)
+        print(f"❌ Error WS/DB en reportar_incidente: {e}", flush=True)
 
     return {
         "status": "success",
         "id_incidente": db_incidente.id_incidente,
         "evaluacion_ia": ai_result,
-        "talleres_notificados": talleres_online
+        "talleres_notificados": talleres_notificados
     }
 
 @router.post("/{id_incidente}/notificar-taller")
@@ -407,13 +442,18 @@ def actualizar_estado_incidente(id_incidente: int, payload: dict, db: Session = 
     incidente.estado_solicitud = nuevo_estado
     
     # --- Sync con el Tenant ---
+    id_taller = payload.get("id_taller")
     asistencia = db.query(models_shared.Asistencia).filter(models_shared.Asistencia.id_incidente == id_incidente).first()
     if asistencia:
         asistencia.estado_asistencia = nuevo_estado
+        if not id_taller:
+            id_taller = asistencia.id_taller
+            
+    if id_taller:
         try:
             from database import get_taller_db
             import models_tenant
-            tenant_db_gen = get_taller_db(asistencia.id_taller)
+            tenant_db_gen = get_taller_db(id_taller)
             tenant_db = next(tenant_db_gen)
             
             # Actualizar Incidente en Tenant
@@ -429,7 +469,7 @@ def actualizar_estado_incidente(id_incidente: int, payload: dict, db: Session = 
             tenant_db.commit()
             tenant_db.close()
         except Exception as e:
-            print(f"⚠️ Error al sincronizar estado con tenant: {e}")
+            print(f"⚠️ Error al sincronizar estado con tenant {id_taller}: {e}")
     # --------------------------
     
     db.commit()

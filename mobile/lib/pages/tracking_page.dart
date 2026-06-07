@@ -580,7 +580,7 @@ class _TrackingPageState extends State<TrackingPage> {
                                     ),
                                     decoration: BoxDecoration(
                                       color: _estadoSolicitud == 'Pendiente'
-                                          ? Colors.blue.withOpacity(0.1)
+                                          ? const Color(0xFFFFFBEB)
                                           : (_estadoSolicitud == 'Completado'
                                                 ? Colors.green.withOpacity(0.1)
                                                 : const Color(0xFFFFFBEB)),
@@ -588,7 +588,7 @@ class _TrackingPageState extends State<TrackingPage> {
                                     ),
                                     child: Text(
                                       _estadoSolicitud == 'Pendiente'
-                                          ? "Buscando Taller..."
+                                          ? "Buscando taller"
                                           : (_estadoSolicitud == 'Aceptado'
                                                 ? "Taller Asignado"
                                                 : (_estadoSolicitud ==
@@ -600,7 +600,7 @@ class _TrackingPageState extends State<TrackingPage> {
                                                             : "Finalizado"))),
                                       style: GoogleFonts.inter(
                                         color: _estadoSolicitud == 'Pendiente'
-                                            ? Colors.blue
+                                            ? const Color(0xFFD97706)
                                             : (_estadoSolicitud == 'Completado'
                                                   ? Colors.green
                                                   : AppTheme.accentYellow),
@@ -889,7 +889,7 @@ class _TrackingPageState extends State<TrackingPage> {
             ],
           ),
         ),
-        if (isCompleted && !isCurrent)
+        if (isCompleted)
           const Icon(
             Icons.check_circle_outline_rounded,
             color: AppTheme.secondaryGreen,

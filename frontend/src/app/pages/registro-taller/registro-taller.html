@@ -8,7 +8,10 @@
     <p class="subtitle">Únete a la plataforma de asistencia más inteligente.</p>
 
     <div *ngIf="errorMessage" class="error-banner animate-fade-in">
-      {{ errorMessage }}
+      <div>{{ errorMessage }}</div>
+      <div *ngIf="errorMessage.includes('registrado') || errorMessage.includes('cuenta')" style="margin-top: 10px; font-weight: 600;">
+        👉 <a routerLink="/login" style="color: #DC2626; text-decoration: underline; cursor: pointer;">Ir a Iniciar Sesión</a>
+      </div>
     </div>
 
     <div *ngIf="isSuccess" class="success-banner animate-fade-in">

@@ -43,7 +43,8 @@ export class Dashboard implements OnInit, OnDestroy, AfterViewInit {
   stats = {
     incidentesActivos: 0,
     completadosHoy: 0,
-    gananciasHoy: 0
+    gananciasHoy: 0,
+    canceladosHoy: 0
   };
 
   es_24_7 = false;
@@ -83,11 +84,18 @@ export class Dashboard implements OnInit, OnDestroy, AfterViewInit {
     horario_cierre: '18:00:00'
   };
 
+  sonidoNotificacion: string = 'chime';
+  isDarkMode: boolean = true;
+
   // Quotation State
   montoCotizacion: number = 0;
   tiempoCotizacion: number = 15;
   descripcionCotizacion: string = '';
   solicitudParaCotizar: any = null;
+
+  // Rejection Modal State
+  solicitudParaRechazar: any = null;
+  motivoRechazo: string = 'sin_personal';
 
   creandoMecanico = false;
   mecanicoError = '';
@@ -180,6 +188,14 @@ export class Dashboard implements OnInit, OnDestroy, AfterViewInit {
     this.loadEspecialidadesDisponibles();
     this.loadTrabajos();
 
+    const savedSound = localStorage.getItem('taller_sonido_notificacion');
+    if (savedSound) {
+      this.sonidoNotificacion = savedSound;
+    }
+
+    const savedTheme = localStorage.getItem('taller_theme_dark');
+    this.isDarkMode = savedTheme !== 'false';
+
     this.wsService.connect(this.tallerData.id_taller);
     this.wsService.emergency$.subscribe((alerta) => {
       this.procesarAlerta(alerta);
@@ -245,6 +261,12 @@ export class Dashboard implements OnInit, OnDestroy, AfterViewInit {
   }
 
   procesarAlerta(alerta: any) {
+    if (alerta.type === 'COTIZACION_ACEPTADA') {
+      this.loadSolicitudes();
+      this.loadTrabajos();
+      return;
+    }
+
     const baseUrl = BASE_URL;
 
     let ai_text = 'Calculando diagnóstico...';
@@ -277,20 +299,7 @@ export class Dashboard implements OnInit, OnDestroy, AfterViewInit {
 
     this.stats.incidentesActivos = this.solicitudes.length;
 
-    try {
-      const audioCtx = new ((window as any).AudioContext || (window as any).webkitAudioContext)();
-      const oscillator = audioCtx.createOscillator();
-      const gainNode = audioCtx.createGain();
-      oscillator.connect(gainNode);
-      gainNode.connect(audioCtx.destination);
-      oscillator.type = 'sine';
-      oscillator.frequency.setValueAtTime(880, audioCtx.currentTime);
-      gainNode.gain.setValueAtTime(1, audioCtx.currentTime);
-      oscillator.start();
-      oscillator.stop(audioCtx.currentTime + 0.5);
-    } catch (e) {
-      console.warn('AudioContext falló:', e);
-    }
+    this.reproducirSonido(this.sonidoNotificacion);
 
     if (this.map && alerta.latitud && alerta.longitud) {
       try {
@@ -311,6 +320,86 @@ export class Dashboard implements OnInit, OnDestroy, AfterViewInit {
 
   toggleNotificaciones() {
     this.mostrarNotificaciones = !this.mostrarNotificaciones;
+  }
+
+  toggleTheme() {
+    this.isDarkMode = !this.isDarkMode;
+    localStorage.setItem('taller_theme_dark', this.isDarkMode ? 'true' : 'false');
+  }
+
+  probarSonido() {
+    this.reproducirSonido(this.sonidoNotificacion);
+    localStorage.setItem('taller_sonido_notificacion', this.sonidoNotificacion);
+  }
+
+  reproducirSonido(tipo: string) {
+    if (tipo === 'mute') return;
+
+    try {
+      const audioCtx = new ((window as any).AudioContext || (window as any).webkitAudioContext)();
+      const now = audioCtx.currentTime;
+
+      if (tipo === 'classic') {
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(880, now);
+        gain.gain.setValueAtTime(0.15, now);
+        osc.start(now);
+        osc.stop(now + 0.25);
+      } else if (tipo === 'chime') {
+        // Soft arpeggio chime
+        const notes = [523.25, 659.25, 783.99]; // C5, E5, G5
+        notes.forEach((freq, index) => {
+          const osc = audioCtx.createOscillator();
+          const gain = audioCtx.createGain();
+          osc.connect(gain);
+          gain.connect(audioCtx.destination);
+          
+          osc.type = 'sine';
+          osc.frequency.setValueAtTime(freq, now + index * 0.08);
+          
+          gain.gain.setValueAtTime(0.12, now + index * 0.08);
+          gain.gain.exponentialRampToValueAtTime(0.001, now + index * 0.08 + 0.5);
+          
+          osc.start(now + index * 0.08);
+          osc.stop(now + index * 0.08 + 0.6);
+        });
+      } else if (tipo === 'modern') {
+        // Premium dual tone
+        const playTone = (freq: number, vol: number, delay: number, duration: number) => {
+          const osc = audioCtx.createOscillator();
+          const gain = audioCtx.createGain();
+          osc.connect(gain);
+          gain.connect(audioCtx.destination);
+          osc.type = 'triangle';
+          osc.frequency.setValueAtTime(freq, now + delay);
+          gain.gain.setValueAtTime(vol, now + delay);
+          gain.gain.exponentialRampToValueAtTime(0.001, now + delay + duration);
+          osc.start(now + delay);
+          osc.stop(now + delay + duration + 0.05);
+        };
+        playTone(587.33, 0.15, 0, 0.3); // D5
+        playTone(880.00, 0.12, 0.08, 0.4); // A5
+      } else if (tipo === 'chirp') {
+        // Pleasant sci-fi chirp
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(600, now);
+        osc.frequency.exponentialRampToValueAtTime(1200, now + 0.12);
+        gain.gain.setValueAtTime(0.12, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.12);
+        osc.start(now);
+        osc.stop(now + 0.15);
+      }
+    } catch (e) {
+      console.warn('AudioContext failed to play alert sound:', e);
+    }
   }
 
   async guardarHorario() {
@@ -408,9 +497,13 @@ export class Dashboard implements OnInit, OnDestroy, AfterViewInit {
         const allTrabajos = await response.json();
         // Incluir todos los estados activos en la lista
         this.trabajos = allTrabajos.filter((t: any) =>
-          ['Aceptado', 'En Camino', 'Atendido', 'Por Pagar', 'Completado'].includes(t.estado)
+          ['Aceptado', 'En Camino', 'Atendido', 'Por Pagar', 'Completado', 'Rechazado', 'Cancelado'].includes(t.estado)
         );
-        this.stats.gananciasHoy = this.trabajos.reduce((total: any, t: any) => total + (t.monto || 0), 0);
+        this.stats.completadosHoy = allTrabajos.filter((t: any) => t.estado === 'Completado').length;
+        this.stats.canceladosHoy = allTrabajos.filter((t: any) => ['Cancelado', 'Rechazado'].includes(t.estado)).length;
+        this.stats.gananciasHoy = this.trabajos
+          .filter((t: any) => t.estado === 'Completado')
+          .reduce((total: any, t: any) => total + (t.monto || 0), 0);
         this.cdr.detectChanges();
 
         // Limpiar marcadores previos del cliente
@@ -633,10 +726,34 @@ export class Dashboard implements OnInit, OnDestroy, AfterViewInit {
   }
 
   rechazarServicio(solicitud: any) {
-    if (confirm('¿Estás seguro de que deseas rechazar este auxilio vial?')) {
-      this.solicitudes = this.solicitudes.filter(s => s.id_incidente !== solicitud.id_incidente);
-      this.stats.incidentesActivos = this.solicitudes.length;
-      this.cdr.detectChanges();
+    this.solicitudParaRechazar = solicitud;
+    this.motivoRechazo = 'sin_personal';
+  }
+
+  async confirmarRechazo() {
+    if (!this.solicitudParaRechazar) return;
+    const idIncidente = this.solicitudParaRechazar.id_incidente;
+    try {
+      const response = await fetch(`${API_URL}/incidentes/${idIncidente}/estado`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          nuevo_estado: 'Rechazado', 
+          motivo: this.motivoRechazo,
+          id_taller: this.tallerData.id_taller
+        })
+      });
+      if (response.ok) {
+        this.solicitudes = this.solicitudes.filter(s => s.id_incidente !== idIncidente);
+        this.stats.incidentesActivos = this.solicitudes.length;
+        this.solicitudParaRechazar = null;
+        this.cdr.detectChanges();
+      } else {
+        alert('Error al rechazar el servicio.');
+      }
+    } catch (e) {
+      console.error(e);
+      alert('Error de red al rechazar el servicio.');
     }
   }
 
@@ -708,7 +825,7 @@ export class Dashboard implements OnInit, OnDestroy, AfterViewInit {
 
   async loadTallerServicios() {
     try {
-      const response = await fetch(`${API_URL}/talleres/${this.tallerData.id_taller}/servicios`);
+      const response = await fetch(`${API_URL}/talleres/${this.tallerData.id_taller}/servicios-detallados`);
       if (response.ok) {
         this.serviciosAsociados = await response.json();
         this.cdr.detectChanges();
@@ -737,7 +854,7 @@ export class Dashboard implements OnInit, OnDestroy, AfterViewInit {
   async vincularServicio() {
     if (!this.nuevoServicioId) return;
     try {
-      const response = await fetch(`${API_URL}/talleres/${this.tallerData.id_taller}/servicios`, {
+      const response = await fetch(`${API_URL}/talleres/${this.tallerData.id_taller}/servicios-detallados`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -811,7 +928,7 @@ export class Dashboard implements OnInit, OnDestroy, AfterViewInit {
     this.tecnicoSeleccionadoParaEsp = mec;
     this.editandoEspecialidades = false;
     try {
-      const response = await fetch(`${API_URL}/talleres/tecnicos/${mec.id_tecnico}/especialidades`);
+      const response = await fetch(`${API_URL}/talleres/tecnicos/${mec.id_tecnico}/especialidades/${this.tallerData.id_taller}`);
       if (response.ok) {
         const serverEsp = await response.json() || [];
         const cached = localStorage.getItem(`tecnico_${mec.id_tecnico}_esp`);
@@ -833,7 +950,7 @@ export class Dashboard implements OnInit, OnDestroy, AfterViewInit {
   async vincularEspecialidad(idEsp: number) {
     if (!this.tecnicoSeleccionadoParaEsp) return;
     try {
-      const response = await fetch(`${API_URL}/talleres/tecnicos/${this.tecnicoSeleccionadoParaEsp.id_tecnico}/especialidades`, {
+      const response = await fetch(`${API_URL}/talleres/tecnicos/${this.tecnicoSeleccionadoParaEsp.id_tecnico}/especialidades/${this.tallerData.id_taller}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id_especialidad: Number(idEsp) })

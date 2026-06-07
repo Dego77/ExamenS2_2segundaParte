@@ -27,7 +27,7 @@ export class WebsocketService {
     this.socket.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
-        if (data.type === 'NUEVA_EMERGENCIA') {
+        if (data.type === 'NUEVA_EMERGENCIA' || data.type === 'COTIZACION_ACEPTADA') {
           this.emergencySubject.next(data);
         }
       } catch (e) {

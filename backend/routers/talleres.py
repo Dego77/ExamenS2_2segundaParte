@@ -212,11 +212,12 @@ def get_taller_solicitudes(id_taller: int, master_db: Session = Depends(get_db),
     
     taller = master_db.query(models_shared.Taller).filter(models_shared.Taller.id_taller == id_taller).first()
     
-    # Buscamos incidentes en estado 'Pendiente' o 'Notificado' en el Tenant DB del taller
+    # Buscamos incidentes en estado 'Pendiente', 'Notificado' o 'Aceptado' en el Tenant DB del taller
     incidentes = tenant_db.query(models_tenant.Incidente).filter(
         or_(
             models_tenant.Incidente.estado_solicitud == 'Pendiente',
-            models_tenant.Incidente.estado_solicitud == 'Notificado'
+            models_tenant.Incidente.estado_solicitud == 'Notificado',
+            models_tenant.Incidente.estado_solicitud == 'Aceptado'
         )
     ).all()
     
@@ -243,14 +244,35 @@ def get_taller_solicitudes(id_taller: int, master_db: Session = Depends(get_db),
         
         url_audio = audio.url_archivo if audio else None
         url_foto = foto.url_archivo if foto else None
-
+ 
         # Análisis IA (Buscamos en la Maestra)
         analisis = master_db.query(models_shared.AnalisisIA).filter(models_shared.AnalisisIA.id_incidente == inc.id_incidente).first()
         evaluacion_ia = analisis.resumen_estructurado if (analisis and analisis.resumen_estructurado) else "Calculando diagnóstico..."
-
+ 
         # Datos del Cliente/Vehículo (Buscamos en el Tenant del taller)
         t_cliente = tenant_db.query(models_tenant.Cliente).filter(models_tenant.Cliente.id_cliente == inc.id_cliente).first()
         t_vehiculo = tenant_db.query(models_tenant.Vehiculo).filter(models_tenant.Vehiculo.id_vehiculo == inc.id_vehiculo).first()
+ 
+        # Buscar si ya enviamos cotización
+        cot_enviada = master_db.query(models_shared.Cotizacion).filter(
+            models_shared.Cotizacion.id_incidente == inc.id_incidente,
+            models_shared.Cotizacion.id_taller == id_taller
+        ).first()
+        cotizacion_enviada_bool = True if cot_enviada else False
+
+        # Buscar cotización aceptada si la hay
+        cot_aceptada = master_db.query(models_shared.Cotizacion).filter(
+            models_shared.Cotizacion.id_incidente == inc.id_incidente,
+            models_shared.Cotizacion.id_taller == id_taller,
+            models_shared.Cotizacion.estado == 'Aceptada'
+        ).first()
+        
+        cot_info = None
+        if cot_aceptada:
+            cot_info = {
+                "monto": float(cot_aceptada.monto_estimado),
+                "tiempo_minutos": cot_aceptada.tiempo_estimado_minutos
+            }
 
         resultados.append({
             "id_incidente": inc.id_incidente,
@@ -264,7 +286,10 @@ def get_taller_solicitudes(id_taller: int, master_db: Session = Depends(get_db),
             "url_foto_evidencia": f"http://localhost:8001/{url_foto}" if url_foto else None,
             "evaluacion_ia": evaluacion_ia,
             "latitud": inc.ubicacion_latitud,
-            "longitud": inc.ubicacion_longitud
+            "longitud": inc.ubicacion_longitud,
+            "estado_solicitud": inc.estado_solicitud,
+            "cotizacion_aceptada": cot_info,
+            "cotizacion_enviada": cotizacion_enviada_bool
         })
         
     return resultados
@@ -408,13 +433,11 @@ def update_tecnico_fcm_token(id_tecnico: int, request: schemas.UpdateFCMTokenReq
 @router.get("/{id_taller}/trabajos")
 def get_taller_trabajos(id_taller: int, db: Session = Depends(get_taller_db)):
     import models_tenant as models
-    asistencias = db.query(models.Asistencia).all()
+    incidentes = db.query(models.Incidente).all()
     resultados = []
-    for asis in asistencias:
-        inc = asis.incidente
-        if not inc:
-            continue
-            
+    for inc in incidentes:
+        asis = inc.asistencia
+        
         # Obtener datos del cliente del Tenant DB
         from models_tenant import Cliente, Vehiculo
         t_cliente = db.query(Cliente).filter(Cliente.id_cliente == inc.id_cliente).first()
@@ -422,7 +445,7 @@ def get_taller_trabajos(id_taller: int, db: Session = Depends(get_taller_db)):
 
         pago_monto = 0.0
         try:
-            if asis.pago:
+            if asis and asis.pago:
                 pago_monto = float(asis.pago.monto_total)
         except Exception:
             pass
@@ -445,7 +468,7 @@ def get_taller_trabajos(id_taller: int, db: Session = Depends(get_taller_db)):
             "vehiculo": f"{t_vehiculo.marca} {t_vehiculo.modelo} ({t_vehiculo.color})" if t_vehiculo else "Vehículo",
             "problema": inc.tipo_problema,
             "prioridad": inc.nivel_prioridad or "Media",
-            "tecnico": f"{asis.tecnico.nombres} {asis.tecnico.apellidos}" if asis.tecnico else "Sin asignar",
+            "tecnico": f"{asis.tecnico.nombres} {asis.tecnico.apellidos}" if (asis and asis.tecnico) else "Sin asignar",
             "monto": pago_monto,
             "latitud": inc.ubicacion_latitud,
             "longitud": inc.ubicacion_longitud
@@ -557,24 +580,60 @@ def get_servicios_disponibles(db: Session = Depends(get_db)):
     # Dado que el usuario quiere autonomía total, los servicios se gestionan por taller.
     return [] # El taller debe crear los suyos o podemos devolver una lista base si se desea
 
-@router.get("/{id_taller}/servicios")
-def get_taller_servicios_endpoint(id_taller: int, db: Session = Depends(get_taller_db)):
+@router.get("/{id_taller}/servicios-detallados")
+def get_taller_servicios_detallados(id_taller: int, db: Session = Depends(get_taller_db)):
     import models_tenant
-    servicios = db.query(models_tenant.Servicio).all()
-    return servicios
+    ts_list = db.query(models_tenant.TallerServicio).all()
+    resultados = []
+    for ts in ts_list:
+        nombre = ts.servicio.nombre_servicio if ts.servicio else f"Servicio {ts.id_servicio}"
+        resultados.append({
+            "id_servicio": ts.id_servicio,
+            "nombre_servicio": nombre,
+            "precio_especifico_taller": float(ts.precio_especifico_taller),
+            "tiempo_estimado_minutos": ts.tiempo_estimado_minutos
+        })
+    return resultados
 
-@router.post("/{id_taller}/servicios")
-def crear_taller_servicio(id_taller: int, servicio: dict, db: Session = Depends(get_taller_db)):
+@router.post("/{id_taller}/servicios-detallados")
+def vincular_taller_servicio_detallado(id_taller: int, payload: dict, db: Session = Depends(get_taller_db)):
     import models_tenant
-    db_servicio = models_tenant.Servicio(
-        nombre_servicio=servicio.get("nombre_servicio"),
-        descripcion=servicio.get("descripcion"),
-        tarifa_base_estimada=servicio.get("tarifa_base_estimada", 0.0)
+    id_servicio = payload.get("id_servicio")
+    precio = payload.get("precio", 50.0)
+    tiempo = payload.get("tiempo", 30)
+
+    # Asegurar que el servicio genérico exista en la tabla local del tenant
+    existe_srv = db.query(models_tenant.Servicio).filter(models_tenant.Servicio.id_servicio == id_servicio).first()
+    if not existe_srv:
+        nombres_estandar = {
+            1: "Diagnóstico por Escáner y Reparación de Sistemas Eléctricos",
+            2: "Mantenimiento de Suspensión, Frenos y Neumáticos",
+            3: "Suministro e Inspección Rápida de Fluidos (Aceite/Combustible)",
+            4: "Reparación de Chapas y Codificación de Llaves Inteligentes",
+            5: "Servicio de Auxilio Vial y Traslado en Grúa",
+            6: "Mecánica Preventiva, Afinamiento y Reparación de Motor",
+            7: "Mantenimiento Integral del Sistema de Refrigeración"
+        }
+        nombre = nombres_estandar.get(id_servicio, f"Servicio Estándar {id_servicio}")
+        existe_srv = models_tenant.Servicio(
+            id_servicio=id_servicio,
+            nombre_servicio=nombre,
+            tarifa_base_estimada=precio
+        )
+        db.add(existe_srv)
+        db.commit()
+
+    db.query(models_tenant.TallerServicio).filter(models_tenant.TallerServicio.id_servicio == id_servicio).delete()
+
+    t_serv = models_tenant.TallerServicio(
+        id_servicio=id_servicio,
+        precio_especifico_taller=precio,
+        tiempo_estimado_minutos=tiempo,
+        estado_disponible=True
     )
-    db.add(db_servicio)
+    db.add(t_serv)
     db.commit()
-    db.refresh(db_servicio)
-    return db_servicio
+    return {"status": "success", "message": "Servicio vinculado al taller."}
 
 @router.get("/especialidades-disponibles")
 def get_especialidades_disponibles_endpoint():
@@ -585,7 +644,7 @@ def get_taller_especialidades(id_taller: int, db: Session = Depends(get_taller_d
     import models_tenant
     return db.query(models_tenant.Especialidad).all()
 
-@router.get("/tecnicos/{id_tecnico}/especialidades")
+@router.get("/tecnicos/{id_tecnico}/especialidades/{id_taller}")
 def get_tecnico_especialidades_global(id_tecnico: int, id_taller: int, db: Session = Depends(get_taller_db)):
     import models_tenant
     tecnico = db.query(models_tenant.Tecnico).filter(models_tenant.Tecnico.id_tecnico == id_tecnico).first()
@@ -593,7 +652,7 @@ def get_tecnico_especialidades_global(id_tecnico: int, id_taller: int, db: Sessi
         raise HTTPException(status_code=404, detail="Técnico no encontrado")
     return tecnico.especialidades
 
-@router.post("/tecnicos/{id_tecnico}/especialidades")
+@router.post("/tecnicos/{id_tecnico}/especialidades/{id_taller}")
 def vincular_tecnico_especialidad_global(id_tecnico: int, payload: dict, id_taller: int, db: Session = Depends(get_taller_db)):
     import models_tenant
     id_especialidad = payload.get("id_especialidad")

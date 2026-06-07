@@ -27,9 +27,9 @@ async def websocket_tracking(websocket: WebSocket, id_incidente: int):
             lng = data.get("lng")
             
             # Actualizar en la base de datos maestra para que el GET /tracking lo vea
-            from database import SessionLocal
+            from database import MasterSessionLocal
             import models_shared
-            with SessionLocal() as db:
+            with MasterSessionLocal() as db:
                 asistencia = db.query(models_shared.Asistencia).filter(models_shared.Asistencia.id_incidente == id_incidente).first()
                 if asistencia:
                     asistencia.ubicacion_actual_latitud = lat
