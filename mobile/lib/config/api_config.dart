@@ -4,6 +4,6 @@ class ApiConfig {
 
   // static const String baseUrl = 'http://10.0.2.2:8000'; // Desarrollo Local (Emulador Android)
   static const String baseUrl =
-      'http://192.168.1.6:8001'; // Celular Físico (IP Real del PC)
+      'http://192.168.1.23:8001'; // Celular Físico (IP Real del PC)
   // static const String baseUrl = 'https://backend-fastapi-su7t.onrender.com'; // Producción en Render
 }

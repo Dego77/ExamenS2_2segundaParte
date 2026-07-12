@@ -34,6 +34,10 @@ def create_taller(taller: schemas.TallerCreate, db: Session = Depends(get_db)):
     # 5. La base de datos física se creará solo cuando el SuperAdmin apruebe la solicitud
     return new_taller
 
+@router.get("/especialidades-disponibles")
+def get_especialidades_disponibles_endpoint():
+    return [] # Cada taller tiene sus propias especialidades ahora
+
 @router.get("/{id_taller}", response_model=schemas.TallerResponse)
 def read_taller(id_taller: int, db: Session = Depends(get_db)):
     taller = db.query(models.Taller).filter(models.Taller.id_taller == id_taller).first()
@@ -634,10 +638,6 @@ def vincular_taller_servicio_detallado(id_taller: int, payload: dict, db: Sessio
     db.add(t_serv)
     db.commit()
     return {"status": "success", "message": "Servicio vinculado al taller."}
-
-@router.get("/especialidades-disponibles")
-def get_especialidades_disponibles_endpoint():
-    return [] # Cada taller tiene sus propias especialidades ahora
 
 @router.get("/{id_taller}/especialidades")
 def get_taller_especialidades(id_taller: int, db: Session = Depends(get_taller_db)):

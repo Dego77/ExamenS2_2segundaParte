@@ -16,6 +16,8 @@ class Tecnico(Base):
     estado_operativo = Column(String(20), default='Disponible')
     created_at = Column(TIMESTAMP, server_default=func.now())
 
+    especialidades = relationship("Especialidad", secondary="tecnico_especialidades")
+
 class Especialidad(Base):
     __tablename__ = "especialidades"
     id_especialidad = Column(Integer, primary_key=True, index=True)
