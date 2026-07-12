@@ -24,6 +24,8 @@ app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 origins = [
     "http://localhost:4200",
     "http://127.0.0.1:4200",
+    "http://localhost:4201",
+    "http://127.0.0.1:4201",
     "http://192.168.1.5:4200",
     "http://192.168.1.6:4200",
     "http://192.168.1.10:4200",
@@ -34,7 +36,7 @@ origins = [
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+)(:\d+)?$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
